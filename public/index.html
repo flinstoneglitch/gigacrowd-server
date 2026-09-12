@@ -50,6 +50,34 @@
       transform: translate(3px, 3px);
       box-shadow: 3px 3px 0px #ff0055;
     }
+
+    .btn-roar:disabled {
+      cursor: default;
+      opacity: 0.85;
+    }
+
+    #meter-bg {
+      width: 260px;
+      height: 16px;
+      margin-top: 24px;
+      background: #000;
+      border: 2px solid #00ffcc;
+      overflow: hidden;
+    }
+
+    #meter-fill {
+      width: 0%;
+      height: 100%;
+      background: #00ffcc;
+      transition: width 0.08s ease-out;
+    }
+
+    #status {
+      margin-top: 12px;
+      font-size: 0.85rem;
+      color: #fff;
+      min-height: 1.2em;
+    }
   </style>
 </head>
 <body>
@@ -57,6 +85,9 @@
   <h1>GIGAPHONE</h1>
   <p>[ MUSTARD // LIVE BROADCAST GRID ]</p>
   <button id="start-btn" class="btn-roar">JOIN THE ROAR</button>
+
+  <div id="meter-bg"><div id="meter-fill"></div></div>
+  <div id="status">[ TAP TO GRANT MIC ACCESS ]</div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="client.js"></script>

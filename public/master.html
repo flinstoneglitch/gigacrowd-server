@@ -4,10 +4,13 @@
   <meta charset="UTF-8">
   <title>GigaCrowd Broadcast Overlay</title>
   <style>
+    html, body {
+      background: transparent;
+    }
+
     body {
       margin: 0;
       padding: 0;
-      background: #08080c;
       color: #00ffcc;
       font-family: 'Courier New', Courier, monospace;
       display: flex;
@@ -108,7 +111,7 @@
     let audioCtx, gainNode, filterNode, analyserNode;
     let dataArray, bufferLength;
 
-    function initAudio() {
+    async function initAudio() {
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
@@ -148,14 +151,28 @@
       }
 
       if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
+        try {
+          await audioCtx.resume();
+        } catch (err) {
+          // Autoplay blocked — fall through and report the suspended state below.
+        }
       }
 
-      notice.innerText = "[ HYBRID ROAR ACTIVE ]";
-      notice.style.color = "#00ffcc";
+      if (audioCtx.state === 'running') {
+        notice.innerText = "[ HYBRID ROAR ACTIVE ]";
+        notice.style.color = "#00ffcc";
+      } else {
+        // Most OBS/Streamlabs Browser Sources autoplay audio with no gesture
+        // required, so this only shows up in a plain browser tab (or AV
+        // software that enforces standard autoplay policy, e.g. some vMix/
+        // XSplit builds) — one click anywhere on the overlay unlocks it.
+        notice.innerText = "[ CLICK ANYWHERE TO ENABLE AMBIENT ROAR ]";
+        notice.style.color = "#ff0055";
+      }
     }
 
     document.addEventListener('click', initAudio);
+    window.addEventListener('load', initAudio); // auto-start ambience where autoplay is allowed
 
     // Visualizer Canvas Loop
     function drawVisualizer() {
@@ -164,8 +181,10 @@
 
       analyserNode.getByteFrequencyData(dataArray);
 
-      ctx.fillStyle = 'rgba(8, 8, 12, 0.25)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Fully clear each frame (not a translucent fill) — over a transparent
+      // canvas, a translucent fill compounds toward opaque within ~1 second
+      // and blacks out the video underneath in OBS/vMix/Streamlabs/XSplit.
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const barWidth = (canvas.width / bufferLength) * 2;
       let x = 0;
