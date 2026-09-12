@@ -25,6 +25,31 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// --- iOS Universal Links ---
+// Lets a QR/join link (https://.../?room=CODE) open directly in the native
+// app instead of mobile Safari, when the app is installed. iOS fetches this
+// file over HTTPS to verify the app is allowed to claim this domain — it
+// must be exact JSON with no redirects, and specifically NOT have a .json
+// extension in its URL. TEAM_ID.BUNDLE_ID must match the app's actual
+// Apple Developer Team ID and bundle identifier exactly, or iOS silently
+// refuses to open the app and just falls through to the browser.
+const APPLE_APP_ID = 'Q9DTBX8M85.com.gigacrowd.app';
+const appleAppSiteAssociation = {
+  applinks: {
+    apps: [],
+    details: [
+      {
+        appID: APPLE_APP_ID, // legacy key, older iOS versions
+        appIDs: [APPLE_APP_ID], // current key, iOS 13+
+        paths: ['*']
+      }
+    ]
+  }
+};
+app.get(['/.well-known/apple-app-site-association', '/apple-app-site-association'], (req, res) => {
+  res.type('application/json').json(appleAppSiteAssociation);
+});
+
 // --- Rooms ---
 // Each live show is a room: one overlay (master.html, the "master" role) and
 // any number of fan phones (index.html, the "fan" role) joined by room code.
