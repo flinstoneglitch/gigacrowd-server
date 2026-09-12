@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const QRCode = require('qrcode');
 const { Server } = require('socket.io');
 
 const app = express();
@@ -24,49 +25,172 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-let connectedClients = 0;
-
-// Per-client volume state. The overlay's "crowd energy" is meant to represent
-// everyone's excitement together, so it's aggregated (averaged) across every
-// connected client rather than just reflecting whichever telemetry packet
-// happened to arrive most recently.
-const clientVolumes = new Map(); // socket.id -> last reported volume (0-100)
+// --- Rooms ---
+// Each live show is a room: one overlay (master.html, the "master" role) and
+// any number of fan phones (index.html, the "fan" role) joined by room code.
+// Aggregation and broadcast are scoped per room so multiple shows can run at
+// the same time without their crowds bleeding into each other — the earlier
+// version had exactly one global crowd shared by every connection, anywhere.
+//
+// rooms: Map<roomId, { clientVolumes: Map<socketId, volume>, masterSocketId: string|null, closeTimer: Timeout|null }>
+const rooms = new Map();
 const BROADCAST_INTERVAL_MS = 150;
+// A page reload (OBS source refresh, a flaky connection) disconnects the old
+// socket before the new one exists — there's no overlap. Without a grace
+// period, the old socket's disconnect handler deletes the room an instant
+// before the reload's reclaim attempt would have found it. This window gives
+// a reconnecting overlay a real chance to reclaim its show instead of the
+// disconnect handler nuking it out from under it.
+const MASTER_GRACE_PERIOD_MS = 15000;
+const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I — avoids ambiguity if read aloud or typed
+const ROOM_CODE_LENGTH = 6;
 
-function currentCrowdEnergy() {
-  if (clientVolumes.size === 0) return 0;
+function generateRoomCode() {
+  let code;
+  do {
+    code = '';
+    for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
+      code += ROOM_CODE_ALPHABET[Math.floor(Math.random() * ROOM_CODE_ALPHABET.length)];
+    }
+  } while (rooms.has(code)); // vanishingly unlikely to collide, but be certain
+  return code;
+}
+
+function roomEnergy(room) {
+  if (room.clientVolumes.size === 0) return 0;
   let sum = 0;
-  for (const volume of clientVolumes.values()) sum += volume;
-  return Math.round(sum / clientVolumes.size);
+  for (const volume of room.clientVolumes.values()) sum += volume;
+  return Math.round(sum / room.clientVolumes.size);
+}
+
+function originFromSocket(socket) {
+  const headers = socket.handshake.headers || {};
+  if (headers.origin) return headers.origin;
+  if (headers.host) return `${socket.handshake.secure ? 'https' : 'http'}://${headers.host}`;
+  return 'https://gigacrowd-server-production.up.railway.app';
+}
+
+async function buildJoinQr(socket, roomId) {
+  const joinUrl = `${originFromSocket(socket)}/?room=${roomId}`;
+  try {
+    const qrDataUrl = await QRCode.toDataURL(joinUrl, { margin: 1, width: 300 });
+    return { joinUrl, qrDataUrl };
+  } catch (err) {
+    console.error('[GigaCrowd] QR generation failed:', err);
+    return { joinUrl, qrDataUrl: null };
+  }
 }
 
 io.on('connection', (socket) => {
-  connectedClients++;
-  console.log(`[GigaCrowd] Client joined. Active crowd size: ${connectedClients}`);
+  console.log(`[GigaCrowd] Socket connected: ${socket.id}`);
+
+  // The overlay (OBS/Streamlabs/vMix/XSplit) calls this to start a new show
+  // and get a room code + QR code fans can scan to join it.
+  socket.on('create-room', async (_data, callback) => {
+    const roomId = generateRoomCode();
+    rooms.set(roomId, { clientVolumes: new Map(), masterSocketId: socket.id, closeTimer: null });
+    socket.data.roomId = roomId;
+    socket.data.role = 'master';
+    socket.join(roomId);
+
+    const { joinUrl, qrDataUrl } = await buildJoinQr(socket, roomId);
+
+    console.log(`[GigaCrowd] Room ${roomId} created by ${socket.id}`);
+    if (typeof callback === 'function') {
+      callback({ roomId, joinUrl, qrDataUrl });
+    }
+  });
+
+  // Fans (and a reloaded overlay recovering its own show) call this with an
+  // existing room code.
+  socket.on('join-room', async (data, callback) => {
+    const roomId = String((data && data.roomId) || '').toUpperCase();
+    const role = data && data.role === 'master' ? 'master' : 'fan';
+    const room = rooms.get(roomId);
+
+    if (!room) {
+      if (typeof callback === 'function') callback({ ok: false, error: 'Show not found. Check the code and try again.' });
+      return;
+    }
+
+    socket.data.roomId = roomId;
+    socket.data.role = role;
+    socket.join(roomId);
+
+    if (role === 'master') {
+      // An overlay reconnecting (e.g. OBS source reloaded) reclaims its show
+      // rather than orphaning it. Cancel any pending close from the old
+      // socket's disconnect so this reclaim isn't immediately undone by it.
+      if (room.closeTimer) {
+        clearTimeout(room.closeTimer);
+        room.closeTimer = null;
+      }
+      room.masterSocketId = socket.id;
+    } else {
+      console.log(`[GigaCrowd] Fan ${socket.id} joined room ${roomId}`);
+    }
+
+    if (typeof callback === 'function') {
+      if (role === 'master') {
+        // Regenerate the QR too, not just the code — a reclaimed overlay
+        // (page reload) needs a real image, not a broken <img> left over
+        // from a response that only had the earlier create-room's data.
+        const { joinUrl, qrDataUrl } = await buildJoinQr(socket, roomId);
+        callback({ ok: true, roomId, joinUrl, qrDataUrl, clientCount: room.clientVolumes.size });
+      } else {
+        callback({ ok: true, roomId, clientCount: room.clientVolumes.size });
+      }
+    }
+  });
 
   // Handle live volume telemetry. v1 deliberately never receives or relays
   // recorded audio — only this anonymous numeric level, aggregated below.
   socket.on('mic-telemetry', (data) => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return; // never joined a room — nothing to attribute this to
+    const room = rooms.get(roomId);
+    if (!room) return;
+
     const volume = Math.min(100, Math.max(0, Number(data && data.volume) || 0));
-    clientVolumes.set(socket.id, volume);
+    room.clientVolumes.set(socket.id, volume);
   });
 
   socket.on('disconnect', () => {
-    connectedClients = Math.max(0, connectedClients - 1);
-    clientVolumes.delete(socket.id);
-    console.log(`[GigaCrowd] Client left. Active crowd size: ${connectedClients}`);
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    room.clientVolumes.delete(socket.id);
+
+    if (socket.data.role === 'master' && room.masterSocketId === socket.id) {
+      // Don't tear the room down immediately — give a reconnecting overlay
+      // (page reload, brief network drop) a grace window to reclaim it via
+      // join-room before treating the show as actually over.
+      console.log(`[GigaCrowd] Master for room ${roomId} disconnected — closing in ${MASTER_GRACE_PERIOD_MS}ms unless reclaimed`);
+      room.closeTimer = setTimeout(() => {
+        // Only close if nothing reclaimed it in the meantime.
+        if (room.masterSocketId === socket.id) {
+          rooms.delete(roomId);
+          console.log(`[GigaCrowd] Room ${roomId} closed (overlay did not reconnect)`);
+        }
+      }, MASTER_GRACE_PERIOD_MS);
+    } else {
+      console.log(`[GigaCrowd] Fan ${socket.id} left room ${roomId}`);
+    }
   });
 });
 
-// Broadcast the aggregated crowd energy on a fixed tick rather than once per
-// telemetry packet — this decouples the overlay's update rate from how many
-// phones are connected or how often each one reports, so it stays smooth
-// (and doesn't flood every listener) whether there are 2 clients or 2,000.
+// Broadcast each room's aggregated crowd energy on a fixed tick rather than
+// once per telemetry packet — this decouples update rate from how many
+// phones are in a room or how often each one reports.
 setInterval(() => {
-  io.emit('crowdEnergy', {
-    totalEnergy: currentCrowdEnergy(),
-    clientCount: connectedClients
-  });
+  for (const [roomId, room] of rooms) {
+    io.to(roomId).emit('crowdEnergy', {
+      totalEnergy: roomEnergy(room),
+      clientCount: room.clientVolumes.size
+    });
+  }
 }, BROADCAST_INTERVAL_MS);
 
 const PORT = process.env.PORT || 3000;
