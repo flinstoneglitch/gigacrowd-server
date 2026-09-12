@@ -1,3 +1,10 @@
 node_modules/
 .claude/
 .DS_Store
+
+# iOS / Xcode
+ios/App/Pods/
+ios/App/**/xcuserdata/
+*.xcuserstate
+ios/.build/
+ios/App/CapApp-SPM/.build/
