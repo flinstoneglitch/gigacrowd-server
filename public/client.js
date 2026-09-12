@@ -9,7 +9,7 @@
 // planning for the moderation work that would need to land before that
 // feature could come back.)
 
-const socket = io();
+const socket = io(window.GIGACROWD_SERVER_URL);
 
 const startBtn = document.getElementById('start-btn');
 const statusEl = document.getElementById('status');

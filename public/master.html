@@ -90,9 +90,10 @@
     <div class="audio-notice" id="audioNotice">[ CLICK ANYWHERE TO UNMUTE SYNTHESIZED ROAR ]</div>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
+  <script src="vendor/socket.io.min.js"></script>
+  <script src="config.js"></script>
   <script>
-    const socket = io();
+    const socket = io(window.GIGACROWD_SERVER_URL);
     const fill = document.getElementById('fill');
     const val = document.getElementById('val');
     const count = document.getElementById('count');

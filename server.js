@@ -5,7 +5,22 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  // The native iOS app bundles its own copy of these pages and loads them
+  // from a capacitor://localhost origin, not this server's own origin — so
+  // its Socket.IO handshake is cross-origin and gets rejected without this.
+  // Web use from this server's own origin also matches an explicit entry
+  // (Socket.IO doesn't special-case same-origin once `cors` is configured).
+  cors: {
+    origin: [
+      'capacitor://localhost',
+      'http://localhost',
+      'https://localhost',
+      'https://gigacrowd-server-production.up.railway.app'
+    ],
+    methods: ['GET', 'POST']
+  }
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
