@@ -120,6 +120,28 @@ joinForm.addEventListener('submit', (event) => {
 
 startBtn.addEventListener('click', startListening);
 
+// --- Native deep linking (iOS Universal Links) ---
+// Inside the native app, tapping a https://.../?room=CODE link (e.g. from
+// scanning the overlay's QR code) opens this app directly via the
+// com.apple.developer.associated-domains entitlement, and Capacitor's App
+// plugin fires this event with that URL — the page itself never actually
+// navigates there. This has no effect on the plain website (window.Capacitor
+// doesn't exist outside the native app), where the ?room= URL param is
+// already handled by 'connect' above.
+if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+  const CapApp = window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  if (CapApp && CapApp.addListener) {
+    CapApp.addListener('appUrlOpen', (data) => {
+      try {
+        const roomId = new URL(data.url).searchParams.get('room');
+        if (roomId) attemptJoin(roomId);
+      } catch (err) {
+        console.error('[GigaCrowd] Could not parse incoming deep link:', err);
+      }
+    });
+  }
+}
+
 socket.on('connect', () => {
   console.log('[GigaCrowd] Connected to crowd grid.');
   const roomFromUrl = new URLSearchParams(window.location.search).get('room');
