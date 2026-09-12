@@ -125,50 +125,65 @@
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        // --- Layer 1: low rumble bed — always present, this is the ambient
-        // "the crowd is here" floor that plays even at zero excitement. ---
-        const rumbleNoise = audioCtx.createBufferSource();
-        rumbleNoise.buffer = makeNoiseBuffer(audioCtx);
-        rumbleNoise.loop = true;
+        // --- Roar body: two independently-random noise sources blended
+        // together (not one), which builds up denser, broader-spectrum
+        // energy the way an actual crowd rumble reads, instead of the
+        // single-tone "wind through a vent" character one lowpass-filtered
+        // noise source produces on its own. This is the continuous dull
+        // roar that's always present, even at zero excitement — loudness
+        // and brightness both scale up smoothly with crowd energy. ---
+        const bodyA = audioCtx.createBufferSource();
+        bodyA.buffer = makeNoiseBuffer(audioCtx);
+        bodyA.loop = true;
+
+        const bodyB = audioCtx.createBufferSource();
+        bodyB.buffer = makeNoiseBuffer(audioCtx);
+        bodyB.loop = true;
 
         filterNode = audioCtx.createBiquadFilter();
         filterNode.type = 'lowpass';
-        filterNode.frequency.setValueAtTime(400, audioCtx.currentTime);
+        filterNode.frequency.setValueAtTime(500, audioCtx.currentTime);
+
+        const bodyFilterB = audioCtx.createBiquadFilter();
+        bodyFilterB.type = 'lowpass';
+        bodyFilterB.frequency.setValueAtTime(650, audioCtx.currentTime);
 
         gainNode = audioCtx.createGain();
-        gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gainNode.gain.setValueAtTime(0.22, audioCtx.currentTime); // audible dull roar at rest, not near-silent
 
-        // --- Layer 2: "chatter" bed — silent until the crowd actually gets
-        // excited, then fades in fast. Two slightly-detuned tremolo LFOs
-        // give it an overlapping-voices wobble instead of one mechanically
-        // pulsing noise source, so higher energy reads as "more people",
-        // not just "the same noise turned up." ---
+        // Slow, aperiodic "breathing" in the roar's loudness — derived from
+        // heavily-lowpassed noise (a random wander), not a fixed-rate sine
+        // wave. A sine tremolo at a few Hz reads as a mechanical oscillation
+        // (exactly the "wind fan" effect this replaces); noise-derived
+        // wander has no fixed rate for the ear to lock onto, so it just
+        // sounds like an organic crowd swelling and receding.
+        const wanderSource = audioCtx.createBufferSource();
+        wanderSource.buffer = makeNoiseBuffer(audioCtx);
+        wanderSource.loop = true;
+        const wanderFilter = audioCtx.createBiquadFilter();
+        wanderFilter.type = 'lowpass';
+        wanderFilter.frequency.setValueAtTime(0.4, audioCtx.currentTime);
+        const wanderDepth = audioCtx.createGain();
+        wanderDepth.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        wanderSource.connect(wanderFilter);
+        wanderFilter.connect(wanderDepth);
+        wanderDepth.connect(gainNode.gain);
+
+        // --- Excitement layer: a brighter, denser band that's already
+        // present in a small way at rest (no on/off cliff) and grows
+        // continuously louder and busier as the crowd gets louder — this is
+        // what turns "dull roar" into "crowd going off" as energy rises. ---
         const chatterNoise = audioCtx.createBufferSource();
         chatterNoise.buffer = makeNoiseBuffer(audioCtx);
         chatterNoise.loop = true;
 
         const chatterFilter = audioCtx.createBiquadFilter();
         chatterFilter.type = 'bandpass';
-        chatterFilter.frequency.setValueAtTime(1200, audioCtx.currentTime);
-        chatterFilter.Q.setValueAtTime(0.7, audioCtx.currentTime);
+        chatterFilter.frequency.setValueAtTime(900, audioCtx.currentTime);
+        chatterFilter.Q.setValueAtTime(0.5, audioCtx.currentTime);
 
         chatterGain = audioCtx.createGain();
-        chatterGain.gain.setValueAtTime(0, audioCtx.currentTime);
-
-        const tremoloA = audioCtx.createOscillator();
-        tremoloA.frequency.setValueAtTime(3.7, audioCtx.currentTime);
-        const tremoloADepth = audioCtx.createGain();
-        tremoloADepth.gain.setValueAtTime(0.04, audioCtx.currentTime);
-
-        const tremoloB = audioCtx.createOscillator();
-        tremoloB.frequency.setValueAtTime(5.3, audioCtx.currentTime);
-        const tremoloBDepth = audioCtx.createGain();
-        tremoloBDepth.gain.setValueAtTime(0.03, audioCtx.currentTime);
-
-        tremoloA.connect(tremoloADepth);
-        tremoloADepth.connect(chatterGain.gain);
-        tremoloB.connect(tremoloBDepth);
-        tremoloBDepth.connect(chatterGain.gain);
+        chatterGain.gain.setValueAtTime(0.03, audioCtx.currentTime);
 
         // Setup Analyser Node for Visualizer Canvas
         analyserNode = audioCtx.createAnalyser();
@@ -176,11 +191,14 @@
         bufferLength = analyserNode.frequencyBinCount;
         dataArray = new Uint8Array(bufferLength);
 
-        // Chain: rumble -> lowpass -> gain -\
-        //                                     -> analyser -> destination
+        // Chain: bodyA -> lowpass  -\
+        //                            -> gain -\
+        // bodyB -> lowpass(2)      -/           -> analyser -> destination
         // chatter -> bandpass -> chatterGain -/
-        rumbleNoise.connect(filterNode);
+        bodyA.connect(filterNode);
+        bodyB.connect(bodyFilterB);
         filterNode.connect(gainNode);
+        bodyFilterB.connect(gainNode);
         gainNode.connect(analyserNode);
 
         chatterNoise.connect(chatterFilter);
@@ -189,10 +207,10 @@
 
         analyserNode.connect(audioCtx.destination);
 
-        rumbleNoise.start();
+        bodyA.start();
+        bodyB.start();
+        wanderSource.start();
         chatterNoise.start();
-        tremoloA.start();
-        tremoloB.start();
         drawVisualizer();
       }
 
@@ -259,17 +277,20 @@
       if (gainNode && audioCtx && audioCtx.state === 'running') {
         const energy = data.totalEnergy / 100; // 0-1
 
-        const rumbleVolume = Math.max(0.15, energy * 0.8);
-        const cutoffFreq = 300 + (data.totalEnergy * 8);
-        gainNode.gain.setTargetAtTime(rumbleVolume, audioCtx.currentTime, 0.1);
-        filterNode.frequency.setTargetAtTime(cutoffFreq, audioCtx.currentTime, 0.1);
+        // Continuous curve, no on/off cliff: 0.22 is the audible "dull roar"
+        // floor at rest, scaling smoothly up to a full crowd roar as energy
+        // rises. Brightness (filter cutoff) rises alongside it.
+        const rumbleVolume = 0.22 + energy * 0.55;
+        const cutoffFreq = 500 + data.totalEnergy * 9;
+        gainNode.gain.setTargetAtTime(rumbleVolume, audioCtx.currentTime, 0.2);
+        filterNode.frequency.setTargetAtTime(cutoffFreq, audioCtx.currentTime, 0.2);
 
         if (chatterGain) {
-          // Stays essentially silent until the crowd is genuinely excited
-          // (>25% energy), then ramps up fast — this is what makes a loud
-          // crowd sound like "more people," not just "the same noise louder."
-          const chatterLevel = Math.pow(Math.max(0, energy - 0.25), 1.6) * 0.9;
-          chatterGain.gain.setTargetAtTime(chatterLevel, audioCtx.currentTime, 0.15);
+          // Small but present even at rest, growing continuously (not a
+          // threshold jump) — this is what makes a loud crowd sound like
+          // "more people," not just "the same noise turned up."
+          const chatterLevel = 0.03 + Math.pow(energy, 1.3) * 0.5;
+          chatterGain.gain.setTargetAtTime(chatterLevel, audioCtx.currentTime, 0.2);
         }
       }
     });
