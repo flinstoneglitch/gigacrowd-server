@@ -74,6 +74,42 @@
       color: #ff0055;
       margin-top: 8px;
     }
+
+    .show-code-panel {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(11, 11, 11, 0.85);
+      border: 3px solid #fff;
+      box-shadow: 5px 5px 0px #ff0055;
+      padding: 10px 16px;
+      backdrop-filter: blur(8px);
+    }
+
+    .show-code-panel img {
+      width: 72px;
+      height: 72px;
+      display: block;
+      background: #fff;
+      padding: 4px;
+    }
+
+    .show-code-label {
+      font-size: 0.65rem;
+      color: #fff;
+      letter-spacing: 1px;
+    }
+
+    .show-code-value {
+      font-size: 1.4rem;
+      font-weight: 900;
+      color: #00ffcc;
+      letter-spacing: 3px;
+    }
   </style>
 </head>
 <body>
@@ -90,6 +126,14 @@
     <div class="audio-notice" id="audioNotice">[ CLICK ANYWHERE TO UNMUTE SYNTHESIZED ROAR ]</div>
   </div>
 
+  <div class="show-code-panel" id="showCodePanel" hidden>
+    <img id="showCodeQr" alt="Scan to join this show" />
+    <div class="show-code-text">
+      <div class="show-code-label">SCAN TO JOIN THE ROAR</div>
+      <div class="show-code-value" id="showCodeValue">------</div>
+    </div>
+  </div>
+
   <script src="vendor/socket.io.min.js"></script>
   <script src="config.js"></script>
   <script>
@@ -98,7 +142,55 @@
     const val = document.getElementById('val');
     const count = document.getElementById('count');
     const notice = document.getElementById('audioNotice');
-    
+
+    const showCodePanel = document.getElementById('showCodePanel');
+    const showCodeQr = document.getElementById('showCodeQr');
+    const showCodeValue = document.getElementById('showCodeValue');
+
+    // Each overlay session is its own show (room). If this URL already names
+    // one (?room=ABC123 — e.g. this source was reloaded), reclaim it so fans
+    // already connected aren't dropped; otherwise start a fresh show and
+    // display the code/QR fans scan to join it.
+    function setupRoom() {
+      const existingRoom = new URLSearchParams(window.location.search).get('room');
+
+      if (existingRoom) {
+        socket.emit('join-room', { roomId: existingRoom, role: 'master' }, (res) => {
+          if (res && res.ok) {
+            showCodeValue.innerText = existingRoom;
+            if (res.qrDataUrl) showCodeQr.src = res.qrDataUrl;
+            showCodePanel.hidden = false;
+          } else {
+            console.error('[GigaCrowd] Could not reclaim room, starting a new one:', res && res.error);
+            createNewRoom();
+          }
+        });
+      } else {
+        createNewRoom();
+      }
+    }
+
+    function createNewRoom() {
+      socket.emit('create-room', {}, (res) => {
+        if (!res || !res.roomId) {
+          console.error('[GigaCrowd] Failed to create a show room.');
+          return;
+        }
+        showCodeValue.innerText = res.roomId;
+        if (res.qrDataUrl) showCodeQr.src = res.qrDataUrl;
+        showCodePanel.hidden = false;
+
+        // Bake the room into this page's own URL so an accidental reload of
+        // this Browser Source reclaims the same show instead of starting a
+        // brand new one and orphaning already-connected fans.
+        const url = new URL(window.location.href);
+        url.searchParams.set('room', res.roomId);
+        window.history.replaceState({}, '', url);
+      });
+    }
+
+    socket.on('connect', setupRoom);
+
     const canvas = document.getElementById('visualizerCanvas');
     const ctx = canvas.getContext('2d');
 
