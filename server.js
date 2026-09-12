@@ -5,9 +5,7 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  maxHttpBufferSize: 1e7 // Increase max payload limit for audio buffers
-});
+const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -31,19 +29,11 @@ io.on('connection', (socket) => {
   connectedClients++;
   console.log(`[GigaCrowd] Client joined. Active crowd size: ${connectedClients}`);
 
-  // 1. Handle live volume telemetry
+  // Handle live volume telemetry. v1 deliberately never receives or relays
+  // recorded audio — only this anonymous numeric level, aggregated below.
   socket.on('mic-telemetry', (data) => {
     const volume = Math.min(100, Math.max(0, Number(data && data.volume) || 0));
     clientVolumes.set(socket.id, volume);
-  });
-
-  // 2. Handle real-user voice audio clips on cheer spikes
-  socket.on('user-cheer-clip', (data) => {
-    console.log(`[GigaCrowd] Received real user cheer clip! Relaying to master overlay...`);
-    io.emit('play-cheer-clip', {
-      audioData: data.audioData,
-      timestamp: Date.now()
-    });
   });
 
   socket.on('disconnect', () => {

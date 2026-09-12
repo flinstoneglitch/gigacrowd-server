@@ -295,42 +295,10 @@
       }
     });
 
-    function base64ToFloat32Array(base64) {
-      const binaryString = window.atob(base64);
-      const len = binaryString.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return new Float32Array(bytes.buffer);
-    }
-
-    // Play incoming real human voice clips
-    socket.on('play-cheer-clip', (data) => {
-      if (!audioCtx || audioCtx.state !== 'running') return;
-
-      try {
-        const rawFloatData = base64ToFloat32Array(data.audioData);
-        
-        const audioBuffer = audioCtx.createBuffer(1, rawFloatData.length, audioCtx.sampleRate);
-        audioBuffer.getChannelData(0).set(rawFloatData);
-
-        const clipSource = audioCtx.createBufferSource();
-        clipSource.buffer = audioBuffer;
-
-        const clipGain = audioCtx.createGain();
-        clipGain.gain.setValueAtTime(0.8, audioCtx.currentTime); 
-
-        clipSource.connect(clipGain);
-        
-        // Connect clip into the analyzer node so it bounces the visualizer!
-        clipGain.connect(analyserNode);
-
-        clipSource.start();
-      } catch (err) {
-        console.error("Error decoding cheer clip:", err);
-      }
-    });
+    // v1 deliberately never plays real recorded voice clips — the ambient
+    // roar layers above are the only audio output, driven purely by the
+    // anonymous numeric crowdEnergy value. (Real cheer-clip playback was
+    // prototyped and removed; see client.js's header note.)
   </script>
 </body>
 </html>
