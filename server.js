@@ -12,7 +12,20 @@ const io = new Server(server, {
 app.use(express.static(path.join(__dirname, 'public')));
 
 let connectedClients = 0;
-let totalEnergy = 0;
+
+// Per-client volume state. The overlay's "crowd energy" is meant to represent
+// everyone's excitement together, so it's aggregated (averaged) across every
+// connected client rather than just reflecting whichever telemetry packet
+// happened to arrive most recently.
+const clientVolumes = new Map(); // socket.id -> last reported volume (0-100)
+const BROADCAST_INTERVAL_MS = 150;
+
+function currentCrowdEnergy() {
+  if (clientVolumes.size === 0) return 0;
+  let sum = 0;
+  for (const volume of clientVolumes.values()) sum += volume;
+  return Math.round(sum / clientVolumes.size);
+}
 
 io.on('connection', (socket) => {
   connectedClients++;
@@ -20,11 +33,8 @@ io.on('connection', (socket) => {
 
   // 1. Handle live volume telemetry
   socket.on('mic-telemetry', (data) => {
-    totalEnergy = Math.min(100, Math.max(0, data.volume));
-    io.emit('crowdEnergy', {
-      totalEnergy,
-      clientCount: connectedClients
-    });
+    const volume = Math.min(100, Math.max(0, Number(data && data.volume) || 0));
+    clientVolumes.set(socket.id, volume);
   });
 
   // 2. Handle real-user voice audio clips on cheer spikes
@@ -38,9 +48,21 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     connectedClients = Math.max(0, connectedClients - 1);
+    clientVolumes.delete(socket.id);
     console.log(`[GigaCrowd] Client left. Active crowd size: ${connectedClients}`);
   });
 });
+
+// Broadcast the aggregated crowd energy on a fixed tick rather than once per
+// telemetry packet — this decouples the overlay's update rate from how many
+// phones are connected or how often each one reports, so it stays smooth
+// (and doesn't flood every listener) whether there are 2 clients or 2,000.
+setInterval(() => {
+  io.emit('crowdEnergy', {
+    totalEnergy: currentCrowdEnergy(),
+    clientCount: connectedClients
+  });
+}, BROADCAST_INTERVAL_MS);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {

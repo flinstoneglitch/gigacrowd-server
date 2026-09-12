@@ -108,24 +108,28 @@
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
 
-    let audioCtx, gainNode, filterNode, analyserNode;
+    let audioCtx, gainNode, filterNode, chatterGain, analyserNode;
     let dataArray, bufferLength;
+
+    function makeNoiseBuffer(ctx) {
+      const bufferSize = ctx.sampleRate * 2;
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const output = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+      return buffer;
+    }
 
     async function initAudio() {
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        
-        // Setup White Noise Generator
-        const bufferSize = audioCtx.sampleRate * 2;
-        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-        const output = buffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-          output[i] = Math.random() * 2 - 1;
-        }
 
-        const whiteNoise = audioCtx.createBufferSource();
-        whiteNoise.buffer = buffer;
-        whiteNoise.loop = true;
+        // --- Layer 1: low rumble bed — always present, this is the ambient
+        // "the crowd is here" floor that plays even at zero excitement. ---
+        const rumbleNoise = audioCtx.createBufferSource();
+        rumbleNoise.buffer = makeNoiseBuffer(audioCtx);
+        rumbleNoise.loop = true;
 
         filterNode = audioCtx.createBiquadFilter();
         filterNode.type = 'lowpass';
@@ -134,19 +138,61 @@
         gainNode = audioCtx.createGain();
         gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
 
+        // --- Layer 2: "chatter" bed — silent until the crowd actually gets
+        // excited, then fades in fast. Two slightly-detuned tremolo LFOs
+        // give it an overlapping-voices wobble instead of one mechanically
+        // pulsing noise source, so higher energy reads as "more people",
+        // not just "the same noise turned up." ---
+        const chatterNoise = audioCtx.createBufferSource();
+        chatterNoise.buffer = makeNoiseBuffer(audioCtx);
+        chatterNoise.loop = true;
+
+        const chatterFilter = audioCtx.createBiquadFilter();
+        chatterFilter.type = 'bandpass';
+        chatterFilter.frequency.setValueAtTime(1200, audioCtx.currentTime);
+        chatterFilter.Q.setValueAtTime(0.7, audioCtx.currentTime);
+
+        chatterGain = audioCtx.createGain();
+        chatterGain.gain.setValueAtTime(0, audioCtx.currentTime);
+
+        const tremoloA = audioCtx.createOscillator();
+        tremoloA.frequency.setValueAtTime(3.7, audioCtx.currentTime);
+        const tremoloADepth = audioCtx.createGain();
+        tremoloADepth.gain.setValueAtTime(0.04, audioCtx.currentTime);
+
+        const tremoloB = audioCtx.createOscillator();
+        tremoloB.frequency.setValueAtTime(5.3, audioCtx.currentTime);
+        const tremoloBDepth = audioCtx.createGain();
+        tremoloBDepth.gain.setValueAtTime(0.03, audioCtx.currentTime);
+
+        tremoloA.connect(tremoloADepth);
+        tremoloADepth.connect(chatterGain.gain);
+        tremoloB.connect(tremoloBDepth);
+        tremoloBDepth.connect(chatterGain.gain);
+
         // Setup Analyser Node for Visualizer Canvas
         analyserNode = audioCtx.createAnalyser();
         analyserNode.fftSize = 128;
         bufferLength = analyserNode.frequencyBinCount;
         dataArray = new Uint8Array(bufferLength);
 
-        // Chain nodes: Synth -> Filter -> Gain -> Analyser -> Output
-        whiteNoise.connect(filterNode);
+        // Chain: rumble -> lowpass -> gain -\
+        //                                     -> analyser -> destination
+        // chatter -> bandpass -> chatterGain -/
+        rumbleNoise.connect(filterNode);
         filterNode.connect(gainNode);
         gainNode.connect(analyserNode);
+
+        chatterNoise.connect(chatterFilter);
+        chatterFilter.connect(chatterGain);
+        chatterGain.connect(analyserNode);
+
         analyserNode.connect(audioCtx.destination);
 
-        whiteNoise.start();
+        rumbleNoise.start();
+        chatterNoise.start();
+        tremoloA.start();
+        tremoloB.start();
         drawVisualizer();
       }
 
@@ -211,11 +257,20 @@
       count.innerText = data.clientCount;
 
       if (gainNode && audioCtx && audioCtx.state === 'running') {
-        const volumeLevel = Math.max(0.15, (data.totalEnergy / 100) * 0.8);
+        const energy = data.totalEnergy / 100; // 0-1
+
+        const rumbleVolume = Math.max(0.15, energy * 0.8);
         const cutoffFreq = 300 + (data.totalEnergy * 8);
-        
-        gainNode.gain.setTargetAtTime(volumeLevel, audioCtx.currentTime, 0.1);
+        gainNode.gain.setTargetAtTime(rumbleVolume, audioCtx.currentTime, 0.1);
         filterNode.frequency.setTargetAtTime(cutoffFreq, audioCtx.currentTime, 0.1);
+
+        if (chatterGain) {
+          // Stays essentially silent until the crowd is genuinely excited
+          // (>25% energy), then ramps up fast — this is what makes a loud
+          // crowd sound like "more people," not just "the same noise louder."
+          const chatterLevel = Math.pow(Math.max(0, energy - 0.25), 1.6) * 0.9;
+          chatterGain.gain.setTargetAtTime(chatterLevel, audioCtx.currentTime, 0.15);
+        }
       }
     });
 
