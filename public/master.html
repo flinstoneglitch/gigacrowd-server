@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GigaCrowd Broadcast Overlay</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #08080c;
+      color: #00ffcc;
+      font-family: 'Courier New', Courier, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+      text-transform: uppercase;
+      user-select: none;
+    }
+
+    #visualizerCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    .energy-container {
+      position: relative;
+      z-index: 2;
+      margin-top: auto;
+      margin-bottom: 40px;
+      text-align: center;
+      background: rgba(11, 11, 11, 0.85);
+      padding: 24px 32px;
+      border: 4px solid #fff;
+      box-shadow: 8px 8px 0px #ff0055;
+      backdrop-filter: blur(8px);
+      cursor: pointer;
+    }
+
+    .energy-bar-bg {
+      width: 450px;
+      height: 28px;
+      background: #000;
+      border: 2px solid #00ffcc;
+      overflow: hidden;
+    }
+
+    .energy-bar-fill {
+      width: 0%;
+      height: 100%;
+      background: #00ffcc;
+      transition: width 0.1s ease-out;
+    }
+
+    .metrics {
+      font-size: 1.1rem;
+      font-weight: 900;
+      letter-spacing: 2px;
+      margin-top: 15px;
+      color: #fff;
+    }
+
+    .audio-notice {
+      font-size: 0.75rem;
+      color: #ff0055;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="visualizerCanvas"></canvas>
+
+  <div class="energy-container" id="overlayContainer">
+    <div class="energy-bar-bg">
+      <div id="fill" class="energy-bar-fill"></div>
+    </div>
+    <div class="metrics">
+      CROWD ENERGY: <span id="val">0</span>% | CROWD SIZE: <span id="count">0</span>
+    </div>
+    <div class="audio-notice" id="audioNotice">[ CLICK ANYWHERE TO UNMUTE SYNTHESIZED ROAR ]</div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const fill = document.getElementById('fill');
+    const val = document.getElementById('val');
+    const count = document.getElementById('count');
+    const notice = document.getElementById('audioNotice');
+    
+    const canvas = document.getElementById('visualizerCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    let audioCtx, gainNode, filterNode, analyserNode;
+    let dataArray, bufferLength;
+
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Setup White Noise Generator
+        const bufferSize = audioCtx.sampleRate * 2;
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const output = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          output[i] = Math.random() * 2 - 1;
+        }
+
+        const whiteNoise = audioCtx.createBufferSource();
+        whiteNoise.buffer = buffer;
+        whiteNoise.loop = true;
+
+        filterNode = audioCtx.createBiquadFilter();
+        filterNode.type = 'lowpass';
+        filterNode.frequency.setValueAtTime(400, audioCtx.currentTime);
+
+        gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+
+        // Setup Analyser Node for Visualizer Canvas
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = 128;
+        bufferLength = analyserNode.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+
+        // Chain nodes: Synth -> Filter -> Gain -> Analyser -> Output
+        whiteNoise.connect(filterNode);
+        filterNode.connect(gainNode);
+        gainNode.connect(analyserNode);
+        analyserNode.connect(audioCtx.destination);
+
+        whiteNoise.start();
+        drawVisualizer();
+      }
+
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+
+      notice.innerText = "[ HYBRID ROAR ACTIVE ]";
+      notice.style.color = "#00ffcc";
+    }
+
+    document.addEventListener('click', initAudio);
+
+    // Visualizer Canvas Loop
+    function drawVisualizer() {
+      requestAnimationFrame(drawVisualizer);
+      if (!analyserNode) return;
+
+      analyserNode.getByteFrequencyData(dataArray);
+
+      ctx.fillStyle = 'rgba(8, 8, 12, 0.25)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const barWidth = (canvas.width / bufferLength) * 2;
+      let x = 0;
+
+      for (let i = 0; i < bufferLength; i++) {
+        const barHeight = (dataArray[i] / 255) * (canvas.height * 0.45);
+        
+        // Dynamic color gradient shifting from teal to neon pink
+        const r = Math.min(255, dataArray[i] + 50);
+        const g = Math.max(0, 255 - dataArray[i] * 1.5);
+        const b = 204;
+
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillRect(x, canvas.height - barHeight, barWidth - 2, barHeight);
+
+        x += barWidth;
+      }
+    }
+
+    // Telemetry Sync
+    socket.on('crowdEnergy', (data) => {
+      fill.style.width = data.totalEnergy + '%';
+      val.innerText = data.totalEnergy;
+      count.innerText = data.clientCount;
+
+      if (gainNode && audioCtx && audioCtx.state === 'running') {
+        const volumeLevel = Math.max(0.15, (data.totalEnergy / 100) * 0.8);
+        const cutoffFreq = 300 + (data.totalEnergy * 8);
+        
+        gainNode.gain.setTargetAtTime(volumeLevel, audioCtx.currentTime, 0.1);
+        filterNode.frequency.setTargetAtTime(cutoffFreq, audioCtx.currentTime, 0.1);
+      }
+    });
+
+    function base64ToFloat32Array(base64) {
+      const binaryString = window.atob(base64);
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return new Float32Array(bytes.buffer);
+    }
+
+    // Play incoming real human voice clips
+    socket.on('play-cheer-clip', (data) => {
+      if (!audioCtx || audioCtx.state !== 'running') return;
+
+      try {
+        const rawFloatData = base64ToFloat32Array(data.audioData);
+        
+        const audioBuffer = audioCtx.createBuffer(1, rawFloatData.length, audioCtx.sampleRate);
+        audioBuffer.getChannelData(0).set(rawFloatData);
+
+        const clipSource = audioCtx.createBufferSource();
+        clipSource.buffer = audioBuffer;
+
+        const clipGain = audioCtx.createGain();
+        clipGain.gain.setValueAtTime(0.8, audioCtx.currentTime); 
+
+        clipSource.connect(clipGain);
+        
+        // Connect clip into the analyzer node so it bounces the visualizer!
+        clipGain.connect(analyserNode);
+
+        clipSource.start();
+      } catch (err) {
+        console.error("Error decoding cheer clip:", err);
+      }
+    });
+  </script>
+</body>
+</html>

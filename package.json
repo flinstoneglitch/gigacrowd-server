@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@capacitor/cli": "^8.4.3",
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/ios": "^8.5.1",
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3"
+  }
+}
