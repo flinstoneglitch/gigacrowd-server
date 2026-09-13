@@ -79,6 +79,17 @@
       min-height: 1.2em;
     }
 
+    #privacy-link {
+      position: fixed;
+      bottom: 16px;
+      left: 0;
+      right: 0;
+      text-align: center;
+      color: #666;
+      font-size: 0.7rem;
+      text-decoration: underline;
+    }
+
     #join-gate input {
       font-family: inherit;
       font-size: 1.4rem;
@@ -145,6 +156,8 @@
     <div id="meter-bg"><div id="meter-fill"></div></div>
     <div id="status">[ TAP TO GRANT MIC ACCESS ]</div>
   </div>
+
+  <a href="privacy.html" id="privacy-link">Privacy Policy</a>
 
   <script src="vendor/socket.io.min.js"></script>
   <script src="config.js"></script>
