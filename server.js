@@ -57,8 +57,19 @@ app.get(['/.well-known/apple-app-site-association', '/apple-app-site-association
 // the same time without their crowds bleeding into each other — the earlier
 // version had exactly one global crowd shared by every connection, anywhere.
 //
-// rooms: Map<roomId, { clientVolumes: Map<socketId, volume>, masterSocketId: string|null, closeTimer: Timeout|null }>
+// rooms: Map<roomId, { clientVolumes: Map<socketId, volume>, masterSocketId: string|null, closeTimer: Timeout|null, permanent?: true }>
 const rooms = new Map();
+
+// A permanent demo room for App Review (Guideline 2.1(a)): reviewers only
+// have one device and no way to run an OBS overlay themselves, so a normal
+// room — which only exists while a real overlay is connected — is a dead
+// end for them. This one is seeded at boot, never expires, and never gets
+// torn down by the master-disconnect logic below, so the demo code always
+// works: reviewers can join it as a fan from the app, and separately open
+// /master.html?room=DEMO in a plain browser tab to see the overlay side
+// (the crowd-energy visualizer) without needing OBS at all.
+const DEMO_ROOM_ID = 'DEMO';
+rooms.set(DEMO_ROOM_ID, { clientVolumes: new Map(), masterSocketId: null, closeTimer: null, permanent: true });
 const BROADCAST_INTERVAL_MS = 150;
 // A page reload (OBS source refresh, a flaky connection) disconnects the old
 // socket before the new one exists — there's no overlap. Without a grace
@@ -188,7 +199,13 @@ io.on('connection', (socket) => {
 
     room.clientVolumes.delete(socket.id);
 
-    if (socket.data.role === 'master' && room.masterSocketId === socket.id) {
+    if (room.permanent) {
+      // Never torn down — just clear the master slot so a future overlay
+      // connection (or another reviewer) can claim it fresh.
+      if (socket.data.role === 'master' && room.masterSocketId === socket.id) {
+        room.masterSocketId = null;
+      }
+    } else if (socket.data.role === 'master' && room.masterSocketId === socket.id) {
       // Don't tear the room down immediately — give a reconnecting overlay
       // (page reload, brief network drop) a grace window to reclaim it via
       // join-room before treating the show as actually over.
