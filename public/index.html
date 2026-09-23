@@ -79,6 +79,37 @@
       min-height: 1.2em;
     }
 
+    /* Live readout of the server's broadcast crowdEnergy — proof the app is
+       actually connected and doing something, not just visualizing the
+       phone's own mic locally. Visible as soon as the room is joined, before
+       mic access is even granted. */
+    #crowd-readout {
+      margin-top: 28px;
+      padding-top: 20px;
+      border-top: 2px dashed #333;
+    }
+
+    #crowd-energy-value {
+      font-size: 2.4rem;
+      font-weight: 900;
+      color: #ff0055;
+      text-shadow: 2px 2px 0px #00ffcc;
+      line-height: 1;
+    }
+
+    #crowd-readout .crowd-label {
+      font-size: 0.7rem;
+      color: #888;
+      letter-spacing: 2px;
+      margin-top: 4px;
+    }
+
+    #crowd-count {
+      font-size: 0.85rem;
+      color: #00ffcc;
+      margin-top: 8px;
+    }
+
     #privacy-link {
       position: fixed;
       bottom: 16px;
@@ -155,6 +186,14 @@
     <button id="start-btn" class="btn-roar">JOIN THE ROAR</button>
     <div id="meter-bg"><div id="meter-fill"></div></div>
     <div id="status">[ TAP TO GRANT MIC ACCESS ]</div>
+
+    <!-- Live proof the show is real: this updates from the server's own
+         broadcast, not from anything computed locally on this phone. -->
+    <div id="crowd-readout">
+      <div id="crowd-energy-value">0%</div>
+      <div class="crowd-label">LIVE CROWD ENERGY</div>
+      <div id="crowd-count">CONNECTING...</div>
+    </div>
   </div>
 
   <a href="privacy.html" id="privacy-link">Privacy Policy</a>

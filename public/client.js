@@ -23,6 +23,8 @@ const roarGate = document.getElementById('roar-gate');
 const startBtn = document.getElementById('start-btn');
 const statusEl = document.getElementById('status');
 const meterFill = document.getElementById('meter-fill');
+const crowdEnergyValue = document.getElementById('crowd-energy-value');
+const crowdCount = document.getElementById('crowd-count');
 
 const TELEMETRY_INTERVAL_MS = 100; // how often we send volume updates
 
@@ -150,4 +152,16 @@ socket.on('connect', () => {
 
 socket.on('disconnect', () => {
   setStatus('[ DISCONNECTED FROM CROWD GRID ]', '#ff0055');
+});
+
+// Live proof the app is actually connected and doing something server-side —
+// not just visualizing this phone's own mic locally. The server broadcasts
+// this to everyone in the room roughly 6-7x/second, so it starts updating the
+// instant you join, before mic access is even granted.
+socket.on('crowdEnergy', (data) => {
+  if (!crowdEnergyValue || !crowdCount) return;
+  const energy = Math.max(0, Math.min(100, Math.round((data && data.totalEnergy) || 0)));
+  const count = (data && data.clientCount) || 0;
+  crowdEnergyValue.innerText = energy + '%';
+  crowdCount.innerText = count + ' ROARING';
 });
